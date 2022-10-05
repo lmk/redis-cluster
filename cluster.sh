@@ -37,7 +37,7 @@ function shard_redis(){
   result=$(printf "CLUSTER RESET" | redis-cli -h $IP_DB03 -p $P_PORT); 
   if [ "OK" != "$result" ]; then  printf "\033[1;31m$result\r\n\033[0m"; fi
   result=$(redis-cli -h $IP_DB03 -p $P_PORT cluster addslots {10923..16383}); 
-  if [ "OK" != "$result" ]; then  printf "\033[1;31m$result\r\n\033[0m"; f
+  if [ "OK" != "$result" ]; then  printf "\033[1;31m$result\r\n\033[0m"; fi
 }
 
 function addnode_redis(){
