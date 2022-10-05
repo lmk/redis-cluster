@@ -26,12 +26,12 @@ function shard_redis(){
   echo "CLUSTER ADDSLOTS $IP_DB01 $P_PORT {0..5461}"
   result=$(printf "CLUSTER RESET" | redis-cli -h $IP_DB01 -p $P_PORT); 
   if [ "OK" != "$result" ]; then  printf "\033[1;31m$result\r\n\033[0m"; fi
-  result=$(redis-cli -h $IP_DB01 -p $P_PORT cluster addslots {0...5461}); 
+  result=$(redis-cli -h $IP_DB01 -p $P_PORT cluster addslots {0..5461}); 
   if [ "OK" != "$result" ]; then  printf "\033[1;31m$result\r\n\033[0m"; fi
   echo "CLUSTER ADDSLOTS $IP_DB02 $P_PORT {5462..10922}"
   result=$(printf "CLUSTER RESET" | redis-cli -h $IP_DB02 -p $P_PORT); 
   if [ "OK" != "$result" ]; then  printf "\033[1;31m$result\r\n\033[0m"; fi
-  result=$(redis-cli -h $IP_DB02 -p $P_PORT cluster addslots {5462...10922}); 
+  result=$(redis-cli -h $IP_DB02 -p $P_PORT cluster addslots {5462..10922}); 
   if [ "OK" != "$result" ]; then  printf "\033[1;31m$result\r\n\033[0m"; fi
   echo "CLUSTER ADDSLOTS $IP_DB03 $P_PORT {10923..16383}"
   result=$(printf "CLUSTER RESET" | redis-cli -h $IP_DB03 -p $P_PORT); 
