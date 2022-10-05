@@ -9,8 +9,8 @@ YELLOW="\x1b[33m"
 BLUE="\x1b[34m"
 FREE="\x1b[0m"
 
-PARENTSTR="$PARENTSTR"
-CHILDSTR="$CHILDSTR"
+PARENTSTR="master"
+CHILDSTR="slave"
 
 source ./cluster.conf
 
