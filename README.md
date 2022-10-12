@@ -1,5 +1,8 @@
 # redis-cluster
 
+- 각각의 Redis Cluster 구성이 필요해서 간단하게 구성할 수 있도록, conf 파일의 node 정보를 읽어서 cluster를 구성하는 bash script를 만들었다. 
+- 여기서는 Redis는 설치되어 있다고 가정하고, 구성 방법에 대해서만 설명한다. 
+
 ## Cluster 구성
 
 - cluster 관계
