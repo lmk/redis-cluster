@@ -13,6 +13,7 @@ PARENTSTR="master"
 CHILDSTR="slave"
 
 source ./cluster.conf
+DB_CNT="${#IP_DBLIST[@]}"
 
 scriptName=${0##*/}
 
@@ -21,47 +22,89 @@ function print_help(){
   echo "Usage $scriptName [create|check|info|takeover IP]" 
 }
 
+function reset_redis(){
+  for ip in ${IP_DBLIST[@]}; do
+    echo -n -e "flushall $ip:$P_PORT "
+    result=`redis-cli -h $ip -p $P_PORT flushall`
+    if [ "OK" != "$result" ]; then
+      printf "\033[1;31m $result \r\n\033[0m";
+    else 
+      printf "\033[1;32m $result \r\n\033[0m";
+    fi 
+
+    echo -n -e "cluster reset $ip:$P_PORT "
+    result=`redis-cli -h $ip -p $P_PORT cluster reset`
+    if [ "OK" != "$result" ]; then
+      printf "\033[1;31m $result \r\n\033[0m";
+      exit;
+    else 
+      printf "\033[1;32m $result \r\n\033[0m";
+    fi 
+
+    echo -n -e "cluster reset $ip:$C_PORT "
+    result=`redis-cli -h $ip -p $C_PORT cluster reset`
+    if [ "OK" != "$result" ]; then
+      printf "\033[1;31m $result \r\n\033[0m";
+      exit;
+    else 
+      printf "\033[1;32m $result \r\n\033[0m";
+    fi
+  done
+}
+
 function shard_redis(){
-  echo -e "$SKY\n===> $HOSTNAME:$IP_DB01 shard slot 4 redis $PARENTSTR(0-5461, 5462-10922, 10923916383)$FREE"
-  echo "CLUSTER ADDSLOTS $IP_DB01 $P_PORT {0..5461}"
-  result=$(printf "CLUSTER RESET" | redis-cli -h $IP_DB01 -p $P_PORT); 
-  if [ "OK" != "$result" ]; then  printf "\033[1;31m$result\r\n\033[0m"; fi
-  result=$(redis-cli -h $IP_DB01 -p $P_PORT cluster addslots {0..5461}); 
-  if [ "OK" != "$result" ]; then  printf "\033[1;31m$result\r\n\033[0m"; fi
-  echo "CLUSTER ADDSLOTS $IP_DB02 $P_PORT {5462..10922}"
-  result=$(printf "CLUSTER RESET" | redis-cli -h $IP_DB02 -p $P_PORT); 
-  if [ "OK" != "$result" ]; then  printf "\033[1;31m$result\r\n\033[0m"; fi
-  result=$(redis-cli -h $IP_DB02 -p $P_PORT cluster addslots {5462..10922}); 
-  if [ "OK" != "$result" ]; then  printf "\033[1;31m$result\r\n\033[0m"; fi
-  echo "CLUSTER ADDSLOTS $IP_DB03 $P_PORT {10923..16383}"
-  result=$(printf "CLUSTER RESET" | redis-cli -h $IP_DB03 -p $P_PORT); 
-  if [ "OK" != "$result" ]; then  printf "\033[1;31m$result\r\n\033[0m"; fi
-  result=$(redis-cli -h $IP_DB03 -p $P_PORT cluster addslots {10923..16383}); 
-  if [ "OK" != "$result" ]; then  printf "\033[1;31m$result\r\n\033[0m"; fi
+  echo -n -e "$SKY\n===> $HOSTNAME:$IP_DB01 shard slot $DB_CNT redis $PARENTSTR("
+  slots=()
+  offset=$(( 16383 / $DB_CNT ))
+  sno=0
+  eno=0
+  i=0
+  for ip in ${IP_DBLIST[@]}; do
+    i=$(( $i + 1 ))
+    if [ "$i" == "$DB_CNT" ]; then
+      eno=16383
+    else
+      eno=$(( $sno + $offset ))
+    fi
+
+    echo -n -e "$sno-$eno"
+    if [ "$i" != "$DB_CNT" ]; then
+      echo -n -e ", "
+    fi
+
+    slots=("${slots[@]} {$sno..$eno}")
+    sno=$(( $eno + 1 ))
+  done
+  echo -e ")$FREE"
+
+  i=0
+  for slot in ${slots[@]}; do
+    ip=${IP_DBLIST[$i]}
+    echo "CLUSTER ADDSLOTS $ip $P_PORT $slot"
+    i=$((i+1))
+
+    result=`eval "redis-cli" "-h" $ip "-p" $P_PORT "cluster" "addslots" $slot`
+  done
+
+  echo -e "$SKY""===> Done $FREE"
 }
 
 function addnode_redis(){
-  echo -e "$SKY\n===> $HOSTNAME:$IP_DB01 cluster addnode$FREE"
+  echo -n -e "$SKY\n===> $HOSTNAME:$IP_DB01 cluster addnode"
 
-  printf "\
-CLUSTER MEET $IP_DB01 $C_PORT\r\n\
-CLUSTER MEET $IP_DB02 $P_PORT\r\n\
-CLUSTER MEET $IP_DB02 $C_PORT\r\n\
-CLUSTER MEET $IP_DB03 $P_PORT\r\n\
-CLUSTER MEET $IP_DB03 $C_PORT\r\n\
-redis-cli -h $IP_DB01 -p $P_PORT\r\n"
+  for ip in ${IP_DBLIST[@]}; do
+    printf 'CLUSTER MEET %s %s\r\n' "$ip" "$C_PORT"
+    result=`redis-cli -h $IP_DB01 -p $P_PORT cluster meet $ip $C_PORT`
+    if [ "OK" != "$result" ]; then printf "\033[1;31m $result \r\n033[0m"; exit; fi
 
-  (
-    printf "\
-CLUSTER MEET $IP_DB01 $C_PORT\r\n\
-CLUSTER MEET $IP_DB02 $P_PORT\r\n\
-CLUSTER MEET $IP_DB02 $C_PORT\r\n\
-CLUSTER MEET $IP_DB03 $P_PORT\r\n\
-CLUSTER MEET $IP_DB03 $C_PORT\r\n"
-    sleep 1;) | result=$(redis-cli -h $IP_DB01 -p $P_PORT) echo $result | xargs
+    printf 'CLUSTER MEET %s %s\r\n' "$ip" "$P_PORT"
+    result=`redis-cli -h $IP_DB01 -p $P_PORT cluster meet $ip $P_PORT`
+    if [ "OK" != "$result" ]; then printf "\033[1;31m $result \r\n033[0m"; exit; fi
+  done
 
   count=0
   while [ ${count} -le 20 ]; do
+    sleep 1
     cluster=$(redis-cli -c -h $IP_DB01 -p $P_PORT cluster nodes | wc -l)
     handshake=$(redis-cli -c -h $IP_DB01 -p $P_PORT cluster nodes | grep -v $PARENTSTR | grep -v $CHILDSTR | wc -l)
     if [ $handshake -eq 0 ]; then
@@ -69,7 +112,6 @@ CLUSTER MEET $IP_DB03 $C_PORT\r\n"
     fi
     echo "cluster($cluster):handshake($handshake)...$count"
     count=$((count+1))
-    sleep 1
   done
 
   echo "cluster($cluster):handshake($handshake)...$count"
@@ -89,14 +131,23 @@ function cluster_del(){
 function cluster_redis(){
   echo -e "$SKY\n===> $HOSTNAME:$IP_DB01 cluster $PARENTSTR-$CHILDSTR $FREE"
 
-  echo "$PARENTSTR($IP_DB01:$P_PORT)'s $CHILDSTR($IP_DB02:$C_PORT)"
-  redis-cli -c -h $IP_DB02 -p $C_PORT CLUSTER REPLICATE $(redis-cli -c -h $IP_DB01 -p $P_PORT CLUSTER NODES | grep "$IP_DB01:$P_PORT" | awk '{print $1}')
+  #set -x
 
-  echo "$PARENTSTR($IP_DB02:$P_PORT)'s $CHILDSTR($IP_DB03:$C_PORT)"
-  redis-cli -c -h $IP_DB03 -p $C_PORT CLUSTER REPLICATE $(redis-cli -c -h $IP_DB02 -p $P_PORT cluster nodes | grep "$IP_DB02:$P_PORT" | awk '{print $1}')
-
-  echo "$PARENTSTR($IP_DB03:$P_PORT)'s $CHILDSTR($IP_DB01:$C_PORT)"
-  redis-cli -c -h $IP_DB01 -p $C_PORT CLUSTER REPLICATE $(redis-cli -c -h $IP_DB03 -p $P_PORT cluster nodes | grep "$IP_DB03:$P_PORT" | awk '{print $1}')
+  i=0
+  for ip in ${IP_DBLIST[@]}; do
+    i=$(( $i + 1 ))
+    if [ "$i" == "$DB_CNT" ]; then
+      echo "$PARENTSTR($ip:$P_PORT)'s $CHILDSTR(${IP_DBLIST[0]}:$C_PORT)"
+      result=`redis-cli -c -h ${IP_DBLIST[0]} -p $C_PORT CLUSTER REPLICATE $(redis-cli -c -h $ip -p $P_PORT CLUSTER NODES | grep "$ip:$P_PORT" | awk '{print $1}')`
+      if [ "OK" != "$result" ]; then printf "\033[1;31m $result \r\n033[0m"; exit; fi
+    else
+      echo "$PARENTSTR($ip:$P_PORT)'s $CHILDSTR(${IP_DBLIST[$i]}:$C_PORT)"
+      result=`redis-cli -c -h ${IP_DBLIST[$i]} -p $C_PORT CLUSTER REPLICATE $(redis-cli -c -h $ip -p $P_PORT CLUSTER NODES | grep "$ip:$P_PORT" | awk '{print $1}')`
+      if [ "OK" != "$result" ]; then printf "\033[1;31m $result \r\n033[0m"; exit; fi
+    fi
+    
+    redis-cli -c -h $IP_DB01 -p $P_PORT cluster nodes
+  done
 
   count=0
   while [ ${count} -le 20 ]; do
@@ -140,12 +191,9 @@ function check_redis(){
   echo -e "$SKY\n===> $HOSTNAME:$IP_DB01 check cluster$FREE"
 
   local nc_result
-
-  for IP in $IP_LOCAL $IP_DB01 $IP_DB02 $IP_DB03
-  do
+  for IP in ${IP_DBLIST[@]} $IP_LOCAL; do
     nc_result=1
-    for PORT in $P_PORT $C_PORT
-    do
+    for PORT in $P_PORT $C_PORT; do
       nc_result=`timeout 0.3 bash -c "cat < /dev/null > /dev/tcp/$IP/$PORT"; echo $?`
       if [ "$nc_result" = 0 ]; then
         echo "CONNECT IP:$IP PORT:$PORT"
@@ -160,7 +208,7 @@ function check_redis(){
         clusterInfo=$(echo "$clusterInfo" | awk '{print $2,$1,$3,$4,$5,$6,$7,$8,$9}'| sort)
             
         index=0
-        for nodeIP in $IP_DB01 $IP_DB02 $IP_DB03
+        for nodeIP in ${IP_DBLIST[@]}
         do
           for nodePort in $P_PORT $C_PORT
           do
@@ -204,28 +252,29 @@ function cluster_info(){
 function failover(){
   echo -e "$SKY\n===> failover $1 $FREE"
 
-  if [ "$IP_DB01" == "$1" ]; then
-    redis-cli -c -h $IP_DB01 -p $C_PORT CLUSTER FAILOVER
-  elif [ "$IP_DB02" == "$1" ]; then
-    redis-cli -c -h $IP_DB02 -p $C_PORT CLUSTER FAILOVER
-  else
-    redis-cli -c -h $IP_DB03 -p $C_PORT CLUSTER FAILOVER
-  fi
+  for IP in ${IP_DBLIST[@]}; do
+    if [ "$IP" == "$1" ]; then
+      redis-cli -c -h $IP -p $C_PORT CLUSTER FAILOVER
+      echo -e "$SKY ===> Done $FREE"
+      return 0
+    fi 
+  done
 
-  echo -e "$SKY""===> Done $FREE"
+  echo -e "$RED ===> Fail $FREE"
 }
 
 function takeover(){
   echo -e "$SKY\n===> takeover $1 $FREE"
-  if [ "$IP_DB01" == "$1" ]; then
-      redis-cli -c -h $IP_DB01 -p $P_PORT CLUSTER FAILOVER
-  elif [ "$IP_DB02" == "$1" ]; then
-      redis-cli -c -h $IP_DB02 -p $P_PORT CLUSTER FAILOVER
-  else
-      redis-cli -c -h $IP_DB03 -p $P_PORT CLUSTER FAILOVER
-  fi
 
-  echo -e "$SKY""===> Done$FREE"
+  for IP in ${IP_DBLIST[@]}; do
+    if [ "$IP" == "$1" ]; then
+      redis-cli -c -h $IP -p $P_PORT CLUSTER FAILOVER
+      echo -e "$SKY ===> Done $FREE"
+      return 0
+    fi 
+  done
+
+  echo -e "$RED ===> Fail $FREE"
 }
 
 
@@ -245,7 +294,7 @@ if [ "create" = $1 ]; then
    echo "Cancle create."
    exit
   fi
-
+  reset_redis
   shard_redis
   addnode_redis 
   cluster_redis 
